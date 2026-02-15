@@ -318,6 +318,27 @@ In order to compile the _OSC-Qasm_ console version for Windows, you'll need to c
 
 When compiling the Linux application, `pyinstaller` might not be able to set the application icon correctly. You can update the [icon](icon.ico) mannually on the file's properties (`Right-Click -> Properties` or `Ctrl+I`) and clicking on the icon in this window.
 
+### A Locked Dependency Version
+To build a stable version with precisely pinned dependencies for reproducibility, ensure you have [Python](https://www.python.org/) 3.7–3.10 installed on your system.
+
+After cloning or [downloading](https://github.com/iccmr-quantum/OSC-Qasm/archive/refs/heads/main.zip) and unzipping this repo.
+
+You may need to use [pyenv](https://github.com/pyenv) to manage the project's Python version and create the corresponding virtual environment.
+- `brew update`
+- `brew install pyenv`
+
+Please note that you might need to [set up your shell environment for Pyenv](https://github.com/pyenv/pyenv#b-set-up-your-shell-environment-for-pyenv)
+
+To create a Python 3.9.7 virtual environment for OSC-Qasm v2.1.2, proceed as follows:
+- `pyenv install 3.9.7`
+- `cd /path/to/this/repo`
+- `pyenv local 3.9.7`
+
+Follow the same build process, with the following exception:
+
+Install qiskit, python-osc, eel, and pyinstaller​ using the explicitly pinned versions below:
+- `pip install qiskit==0.40.0 python-osc==1.8.0 eel==0.18.2 pyinstaller==6.18.0`
+
 ## Feedback and Getting help
 Please open a [new issue](https://github.com/iccmr-quantum/OSC-Qasm/issues/new).
 

@@ -268,12 +268,14 @@ Note that you Don't need to boot _scsynth_ (`s.boot` command) in order to send o
 Please also note that, as explained in the [Running Server](#running-server) section above, the first job usually takes additional time to complete, as some resources need to be loaded in the server.
 
 ## Build
-Before starting, make sure you have [Python](https://www.python.org/) 3.7+ in your system.
+Before starting, make sure you have [Python](https://www.python.org/) 3.7-3.10 in your system.
 - when using the installer on windows make sure to select the option `Add Python X to PATH`
+
+You may need to use [pyenv](https://github.com/pyenv/pyenv?tab=readme-ov-file#installation) to install and manage the required Python version. Please note that after installing pyenv, you must [set up your shell environment for pyenv](https://github.com/pyenv/pyenv#b-set-up-your-shell-environment-for-pyenv) for it to work correctly.
 
 Clone or [download](https://github.com/iccmr-quantum/OSC-Qasm/archive/refs/heads/main.zip) and unzip this repo.
 
-Open the Terminal (Mac/Linux) or Command Prompt (Windows) and navigate to the folder  where you saved the repo.
+Open the Terminal (Mac/Linux) or Command Prompt (Windows) and navigate to the folder where you saved the repo.
 - see here a refresher on how to navigate using the terminal [[1](https://computers.tutsplus.com/tutorials/navigating-the-terminal-a-gentle-introduction--mac-3855)][[2](https://www.macworld.com/article/221277/command-line-navigating-files-folders-mac-terminal.html)]
 
 Create a python virtual environment
@@ -286,12 +288,23 @@ Enter your new python virtual environment
 
 At the start of your terminal prompt, it should show `(OSCQasm)`, indicating that you're in your new virtual environment.
 
+Before installing dependencies, ensure the Python version is 3.7–3.10. We recommend using Python 3.9.7 for optimal compatibility.
+
+Install Python 3.9.7 via pyenv
+- `pyenv install 3.9.7` 
+
+Set this version as the local default
+- `pyenv local 3.9.7`
+
+Verify the installation
+- `python --version` This should output `Python 3.9.7`.
+
 Update pip and setuptools
 - `pip install --upgrade pip setuptools`
 - Note: if for some reason you don't have pip, please [install it](https://phoenixnap.com/kb/install-pip-windows)
 
 Install qiskit, python-osc, eel, and pyinstaller
-- `pip install qiskit python-osc eel pyinstaller`
+- `pip install qiskit==0.40.0 python-osc==1.8.0 eel==0.18.2 pyinstaller==6.18.0`
 
 Please note that the **GUI** mode requires google chrome browser to be installed.
 
@@ -317,27 +330,6 @@ You might need to edit the `.spec` file to make sure lines 3 to 8 correctly refe
 In order to compile the _OSC-Qasm_ console version for Windows, you'll need to change line 55 of `osq_qasm_windows.spec` to `console=True,`, and line 48 to `name=OSC_Qasm_2_console`. Note that the reason for this separate version is tied to a known bug on Windows, as reported [here](https://github.com/pyinstaller/pyinstaller/issues/6244).
 
 When compiling the Linux application, `pyinstaller` might not be able to set the application icon correctly. You can update the [icon](icon.ico) mannually on the file's properties (`Right-Click -> Properties` or `Ctrl+I`) and clicking on the icon in this window.
-
-### A Locked Dependency Version
-To build a stable version with precisely pinned dependencies for reproducibility, ensure you have [Python](https://www.python.org/) 3.7–3.10 installed on your system.
-
-After cloning or [downloading](https://github.com/iccmr-quantum/OSC-Qasm/archive/refs/heads/main.zip) and unzipping this repo.
-
-You may need to use [pyenv](https://github.com/pyenv) to manage the project's Python version and create the corresponding virtual environment.
-- `brew update`
-- `brew install pyenv`
-
-Please note that you might need to [set up your shell environment for Pyenv](https://github.com/pyenv/pyenv#b-set-up-your-shell-environment-for-pyenv)
-
-To create a Python 3.9.7 virtual environment for OSC-Qasm v2.1.2, proceed as follows:
-- `pyenv install 3.9.7`
-- `cd /path/to/this/repo`
-- `pyenv local 3.9.7`
-
-Follow the same build process, with the following exception:
-
-Install qiskit, python-osc, eel, and pyinstaller​ using the explicitly pinned versions below:
-- `pip install qiskit==0.40.0 python-osc==1.8.0 eel==0.18.2 pyinstaller==6.18.0`
 
 ## Feedback and Getting help
 Please open a [new issue](https://github.com/iccmr-quantum/OSC-Qasm/issues/new).

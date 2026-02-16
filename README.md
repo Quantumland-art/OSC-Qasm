@@ -278,17 +278,7 @@ Clone or [download](https://github.com/iccmr-quantum/OSC-Qasm/archive/refs/heads
 Open the Terminal (Mac/Linux) or Command Prompt (Windows) and navigate to the folder where you saved the repo.
 - see here a refresher on how to navigate using the terminal [[1](https://computers.tutsplus.com/tutorials/navigating-the-terminal-a-gentle-introduction--mac-3855)][[2](https://www.macworld.com/article/221277/command-line-navigating-files-folders-mac-terminal.html)]
 
-Create a python virtual environment
-- on the terminal, type: `python3 -m venv OSCQasm`
-- depending on your system, you may simply use: `python -m venv OSCQasm`
-
-Enter your new python virtual environment
-- on mac/linux: `source OSCQasm/bin/activate`
-- on windows: `OSCQasm\Scripts\activate`
-
-At the start of your terminal prompt, it should show `(OSCQasm)`, indicating that you're in your new virtual environment.
-
-Before installing dependencies, ensure the Python version is 3.7–3.10. We recommend using Python 3.9.7 for optimal compatibility.
+Setting up an automatic python version switching. We recommend using Python 3.9.7 for optimal compatibility
 
 Install Python 3.9.7 via pyenv
 - `pyenv install 3.9.7` 
@@ -298,6 +288,16 @@ Set this version as the local default
 
 Verify the installation
 - `python --version` This should output `Python 3.9.7`.
+
+Create a python virtual environment
+- on the terminal, type: `python3 -m venv OSCQasm`
+- depending on your system, you may simply use: `python -m venv OSCQasm`
+
+Enter your new python virtual environment
+- on mac/linux: `source OSCQasm/bin/activate`
+- on windows: `OSCQasm\Scripts\activate`
+
+At the start of your terminal prompt, it should show `(OSCQasm)`, indicating that you're in your new virtual environment.
 
 Update pip and setuptools
 - `pip install --upgrade pip setuptools`

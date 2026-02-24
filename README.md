@@ -268,13 +268,26 @@ Note that you Don't need to boot _scsynth_ (`s.boot` command) in order to send o
 Please also note that, as explained in the [Running Server](#running-server) section above, the first job usually takes additional time to complete, as some resources need to be loaded in the server.
 
 ## Build
-Before starting, make sure you have [Python](https://www.python.org/) 3.7+ in your system.
+Before starting, make sure you have [Python](https://www.python.org/) 3.7-3.10 in your system.
 - when using the installer on windows make sure to select the option `Add Python X to PATH`
+
+You may need to use [pyenv](https://github.com/pyenv/pyenv?tab=readme-ov-file#installation) to install and manage the required Python version. Please note that after installing pyenv, you must [set up your shell environment for pyenv](https://github.com/pyenv/pyenv#b-set-up-your-shell-environment-for-pyenv) for it to work correctly.
 
 Clone or [download](https://github.com/iccmr-quantum/OSC-Qasm/archive/refs/heads/main.zip) and unzip this repo.
 
-Open the Terminal (Mac/Linux) or Command Prompt (Windows) and navigate to the folder  where you saved the repo.
+Open the Terminal (Mac/Linux) or Command Prompt (Windows) and navigate to the folder where you saved the repo.
 - see here a refresher on how to navigate using the terminal [[1](https://computers.tutsplus.com/tutorials/navigating-the-terminal-a-gentle-introduction--mac-3855)][[2](https://www.macworld.com/article/221277/command-line-navigating-files-folders-mac-terminal.html)]
+
+Setting up an automatic python version switching. We recommend using Python 3.9.7 for optimal compatibility
+
+Install Python 3.9.7 via pyenv
+- `pyenv install 3.9.7` 
+
+Set this version as the local default
+- `pyenv local 3.9.7`
+
+Verify the installation
+- `python --version` This should output `Python 3.9.7`.
 
 Create a python virtual environment
 - on the terminal, type: `python3 -m venv OSCQasm`
@@ -291,7 +304,7 @@ Update pip and setuptools
 - Note: if for some reason you don't have pip, please [install it](https://phoenixnap.com/kb/install-pip-windows)
 
 Install qiskit, python-osc, eel, and pyinstaller
-- `pip install qiskit python-osc eel pyinstaller`
+- `pip install qiskit==0.40.0 python-osc==1.8.0 eel==0.18.2 pyinstaller==6.18.0`
 
 Please note that the **GUI** mode requires google chrome browser to be installed.
 

@@ -68,8 +68,8 @@ When you're done working with _OSC-Qasm_ you can stop it by pressing `Ctrl+C`.
 Whether you are running _OSC-Qasm 2_ in **GUI** mode or **CLI** mode, using the compiled application, or building from source, you can configure your server by using some additional arguments and flags. The list below, that you can retrieve from running the `--help` argument, includes a detailed description of each option.
 
 ```console
-usage: osc_qasm.py [-h] [--token TOKEN] [--hub HUB] [--group GROUP]
-                   [--project PROJECT]
+usage: osc_qasm.py [-h] [--token TOKEN] [--region REGION] [--instance INSTANCE]
+                   [--remote [REMOTE]] [--headless [HEADLESS]]
                    [receive_port] [send_port] [ip]
 
 positional arguments:
@@ -85,14 +85,12 @@ positional arguments:
 optional arguments:
   -h, --help              show this help message and exit
   --token TOKEN           If you want to run circuits on real quantum hardware, you
-                          need to provide your IBMQ token (see https://quantum-
-                          computing.ibm.com/account)
-  --hub HUB               If you want to run circuits on real quantum hardware, you
-                          need to provide your IBMQ Hub
-  --group GROUP           If you want to run circuits on real quantum hardware, you
-                          need to provide your IBMQ Group
-  --project PROJECT       If you want to run circuits on real quantum hardware, you
-                          need to provide your IBMQ Project
+                          need to provide your IBM Cloud API Key (see https://
+                          cloud.ibm.com/iam/apikeys)
+  --region REGION         If you want to run circuits on real quantum hardware, you
+                          need to provide your IBM Runtime region
+  --instance INSTANCE     If you want to run circuits on real quantum hardware, you
+                          need to provide your IBM Runtime instance or CRN
   --remote [REMOTE]       Declare this as a remote server. In this case, OSC-Qasm
                           will be listening to messages coming into the network
                           adapter address. If there is a specific network adapter
@@ -101,7 +99,33 @@ optional arguments:
                           don't want to launch the GUI and only work in the terminal.
 ```
 
-To learn more about `--token`, `--hub`, `--group`, and `--project` please visit https://quantum-computing.ibm.com. The `--headless` tag is explained above in the [CLI](#cli) section. The `--remote` tag is further explained in the [Network Distribution](#network-distribution) section below.
+To learn more about `--token`, `--region`, and `--instance`, please visit the [IBM Cloud API keys page](https://cloud.ibm.com/iam/apikeys) and the IBM Quantum / Runtime documentation. The `--headless` tag is explained above in the [CLI](#cli) section. The `--remote` tag is further explained in the [Network Distribution](#network-distribution) section below.
+
+### Execution Backends
+
+The current `osc_qasm.py` supports the following backend categories:
+
+- `qasm_simulator`
+  - Runs locally with a `Statevector` based sampling path.
+
+- `Fake*` backends from `qiskit_ibm_runtime.fake_provider`
+  - Examples: `FakeManilaV2`, `FakeJakartaV2`, `FakeTorino`, `FakeFez`.
+  - You can browse the official fake backend list in the Qiskit IBM Runtime docs: [Fake Provider](https://qiskit.qotlabs.org/docs/api/qiskit-ibm-runtime/fake-provider).
+  - Fake backends are currently used for transpilation constraints and for retrieving backend snapshot data.
+  - Returned counts are post-processed with readout-noise snapshot values such as `prob_meas0_prep1` and `prob_meas1_prep0`.
+  - In the current implementation, fake backend support is a local ideal-sampling path with readout-noise approximation, not a full noisy simulation.
+
+- Real IBM Quantum backends
+  - Any non-fake backend name is treated as a real IBM Runtime backend when `--token` is supplied.
+  - Execution is done through `QiskitRuntimeService` and `SamplerV2`.
+
+Examples:
+
+```console
+python osc_qasm.py --headless
+python osc_qasm.py --headless --token YOUR_API_KEY --region us-east --instance open-instance
+python osc_qasm.py --headless --remote
+```
 
 ### Network Distribution
 
@@ -268,26 +292,13 @@ Note that you Don't need to boot _scsynth_ (`s.boot` command) in order to send o
 Please also note that, as explained in the [Running Server](#running-server) section above, the first job usually takes additional time to complete, as some resources need to be loaded in the server.
 
 ## Build
-Before starting, make sure you have [Python](https://www.python.org/) 3.7-3.10 in your system.
+Before starting, make sure you have [Python](https://www.python.org/) 3.10+ in your system.
 - when using the installer on windows make sure to select the option `Add Python X to PATH`
-
-You may need to use [pyenv](https://github.com/pyenv/pyenv?tab=readme-ov-file#installation) to install and manage the required Python version. Please note that after installing pyenv, you must [set up your shell environment for pyenv](https://github.com/pyenv/pyenv#b-set-up-your-shell-environment-for-pyenv) for it to work correctly.
 
 Clone or [download](https://github.com/iccmr-quantum/OSC-Qasm/archive/refs/heads/main.zip) and unzip this repo.
 
-Open the Terminal (Mac/Linux) or Command Prompt (Windows) and navigate to the folder where you saved the repo.
-- see here a refresher on how to navigate using the terminal [[1](https://computers.tutsplus.com/tutorials/navigating-the-terminal-a-gentle-introduction--mac-3855)][[2](https://www.macworld.com/article/221277/command-line-navigating-files-folders-mac-terminal.html)]
-
-Setting up an automatic python version switching. We recommend using Python 3.9.7 for optimal compatibility
-
-Install Python 3.9.7 via pyenv
-- `pyenv install 3.9.7` 
-
-Set this version as the local default
-- `pyenv local 3.9.7`
-
-Verify the installation
-- `python --version` This should output `Python 3.9.7`.
+Open the Terminal (Mac/Linux) or Command Prompt (Windows) and navigate to the folder  where you saved the repo.
+- see here a refresher on how to navigate using the terminal [[1](https://web.archive.org/web/20240206025828/https://computers.tutsplus.com/navigating-the-terminal-a-gentle-introduction--mac-3855t)][[2](https://www.macworld.com/article/221277/command-line-navigating-files-folders-mac-terminal.html)]
 
 Create a python virtual environment
 - on the terminal, type: `python3 -m venv OSCQasm`
@@ -303,8 +314,8 @@ Update pip and setuptools
 - `pip install --upgrade pip setuptools`
 - Note: if for some reason you don't have pip, please [install it](https://phoenixnap.com/kb/install-pip-windows)
 
-Install qiskit, python-osc, eel, and pyinstaller
-- `pip install qiskit==0.40.0 python-osc==1.8.0 eel==0.18.2 pyinstaller==6.18.0`
+Install qiskit, qiskit-ibm-runtime, python-osc, eel, pyinstaller and numpy
+- `pip install qiskit==2.4.1 qiskit-ibm-runtime==0.47.0 python-osc==1.10.2 eel==0.18.2 pyinstaller==6.20.0 numpy==2.2.6`
 
 Please note that the **GUI** mode requires google chrome browser to be installed.
 

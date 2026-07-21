@@ -7,32 +7,244 @@
 #
 
 from pythonosc import dispatcher, osc_server, udp_client
-from qiskit import *
-from qiskit.test.mock import *
-from qiskit.tools import job_monitor
+from qiskit import QuantumCircuit, transpile
+from qiskit.quantum_info import Statevector
+from qiskit_ibm_runtime import QiskitRuntimeService, SamplerV2
 import argparse
 import sys
 import eel
 import socket
 import asyncio
+import numpy as np
+import importlib
+import time
 
-class FileLikeOutputOSC(object):
-    ''' This class emulates a File-Like object
-        with a "write()" method that can be used
-        by print() and qiskit.tools.job_monitor()
-        as an alternative output (replacing sys.stdout)
-        to send messages through the OSC-Qasm client
+def _normalize_instance(instance):
+    if not instance:
+        return "open-instance"
+    s = str(instance).strip()
+    if s.lower() == "open-instance":
+        return "open-instance"
+    if s.startswith("crn:"):
+        return s
+    return "open-instance"
 
-        usage: print("foo", file=FileLikeOutputOSC())
-        '''
-    def __init__(self):
+def _normalize_region(region):
+    if not region:
+        return "us-east"
+    s = str(region).strip().lower()
+    if s in ("us-east", "eu-de"):
+        return s
+    return "us-east"
+
+def _normalize_backend_name(backend_name):
+    s = str(backend_name).strip()
+    low = s.lower()
+    # Accept snake_case fake backend names from Max/Pd and map to qiskit class naming.
+    # Example: fake_torino -> FakeTorino
+    if low.startswith('fake_'):
+        tail = low[5:]
+        return 'Fake' + ''.join(part.capitalize() for part in tail.split('_') if part)
+    return s
+
+def _local_statevector_counts(qc, shots):
+    try:
+        qc_nm = qc.remove_final_measurements(inplace=False)
+    except Exception:
+        qc_nm = QuantumCircuit(qc.num_qubits)
+        for instr, qargs, cargs in qc.data:
+            if instr.name != 'measure':
+                qc_nm.append(instr, qargs, cargs)
+    state = Statevector.from_int(0, dims=(2,) * qc_nm.num_qubits).evolve(qc_nm)
+    probs_dict = state.probabilities_dict()
+    keys = list(probs_dict.keys())
+    probs = np.array([probs_dict[k] for k in keys], dtype=float)
+    if probs.sum() == 0:
+        probs = np.ones(len(keys)) / len(keys)
+    samples = np.random.choice(keys, size=int(shots), p=probs)
+    counts = {}
+    for s in samples:
+        counts[s] = counts.get(s, 0) + 1
+    return counts
+
+def _readout_error_probs(props, qubit):
+    p01 = None
+    p10 = None
+    try:
+        for item in props.qubits[int(qubit)]:
+            if getattr(item, "name", None) == "prob_meas0_prep1":
+                p01 = float(item.value)
+            elif getattr(item, "name", None) == "prob_meas1_prep0":
+                p10 = float(item.value)
+    except Exception:
         pass
+    if p01 is None or p10 is None:
+        try:
+            ro = float(props.readout_error(int(qubit)))
+            p01 = ro / 2.0
+            p10 = ro / 2.0
+        except Exception:
+            return None, None
+    p01 = min(max(p01, 0.0), 1.0)
+    p10 = min(max(p10, 0.0), 1.0)
+    return p01, p10
 
-    def write(self, text):
-        if text != f'\n' and text != "": # Skips end='\n'|'' argument messages
-            print(text) # uiprint back to console
-            # Send message body back to Max on info channel
-            client.send_message("/info", text[12:])
+def _apply_readout_noise_from_backend(counts, shots, backend):
+    try:
+        props = backend.properties()
+    except Exception:
+        props = None
+    if props is None:
+        raise RuntimeError("Fake backend does not expose backend.properties(); cannot apply noise snapshot.")
+
+    if not counts:
+        return {}
+
+    nbits = max(len(str(k)) for k in counts.keys())
+    total = sum(int(v) for v in counts.values()) or int(shots)
+    dist = {}
+    for k, v in counts.items():
+        bs = str(k).zfill(nbits)
+        dist[bs] = dist.get(bs, 0.0) + (int(v) / total)
+
+    for q in range(nbits):
+        p01, p10 = _readout_error_probs(props, q)
+        if p01 is None or p10 is None:
+            raise RuntimeError(f"Missing readout error snapshot for qubit {q}.")
+        bit_pos = nbits - 1 - q
+        new_dist = {}
+        for bs, p in dist.items():
+            b = bs[bit_pos]
+            if b == "0":
+                bs0 = bs
+                bs1 = bs[:bit_pos] + "1" + bs[bit_pos + 1 :]
+                new_dist[bs0] = new_dist.get(bs0, 0.0) + p * (1.0 - p10)
+                new_dist[bs1] = new_dist.get(bs1, 0.0) + p * p10
+            else:
+                bs1 = bs
+                bs0 = bs[:bit_pos] + "0" + bs[bit_pos + 1 :]
+                new_dist[bs1] = new_dist.get(bs1, 0.0) + p * (1.0 - p01)
+                new_dist[bs0] = new_dist.get(bs0, 0.0) + p * p01
+        dist = new_dist
+
+    keys = list(dist.keys())
+    probs = np.array([dist[k] for k in keys], dtype=float)
+    s = probs.sum()
+    if s <= 0:
+        probs = np.ones(len(keys)) / len(keys)
+    else:
+        probs = probs / s
+    samples = np.random.choice(keys, size=int(shots), p=probs)
+    out = {}
+    for bs in samples:
+        out[bs] = out.get(bs, 0) + 1
+    return out
+
+def _configure_runtime(token, region, instance):
+    runtime = {
+        "provider": None,
+        "token": token if token and token != "false" else None,
+        "instance": _normalize_instance(instance),
+        "region": _normalize_region(region),
+    }
+    if runtime["token"]:
+        ensure_provider(runtime)
+    return runtime
+
+def _resolve_local_ip(remote_value):
+    if remote_value in (False, "false"):
+        return "127.0.0.1"
+    if remote_value not in (None, "None"):
+        return remote_value
+
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        sock.connect(("8.8.8.8", 80))
+        return sock.getsockname()[0]
+    finally:
+        sock.close()
+
+def ensure_provider(runtime):
+    token = runtime["token"]
+    instance = runtime["instance"]
+    region = runtime["region"]
+    if runtime["provider"]:
+        return runtime["provider"]
+    if not token:
+        return None
+    try:
+        runtime["provider"] = QiskitRuntimeService(
+            channel="ibm_cloud",
+            token=token,
+            instance=instance,
+            region=region,
+        )
+    except TypeError:
+        try:
+            runtime["provider"] = QiskitRuntimeService(
+                channel="ibm_cloud",
+                cloud_api_key=token,
+                instance=instance,
+                cloud_region=region,
+            )
+        except Exception as e:
+            uiprint(str(e))
+    except Exception as e:
+        uiprint(str(e))
+    return runtime["provider"]
+
+def _direct_cloud_sampler(runtime, backend_name, shots, qc):
+    try:
+        srv = ensure_provider(runtime)
+
+        if not srv:
+            return None, "Could not initialize QiskitRuntimeService. Check API Key/CRN."
+
+        uiprint(f"Qiskit Runtime: getting backend {backend_name}...")
+        backend = srv.backend(backend_name)
+        uiprint(f"Qiskit Runtime: transpiling for {backend_name}...")
+        isa_qc = transpile(qc, backend=backend, optimization_level=1)
+        uiprint("Qiskit Runtime: submitting job...")
+
+        sampler = SamplerV2(mode=backend)
+        job = sampler.run([isa_qc], shots=int(shots))
+
+        uiprint(f"Job ID: {job.job_id()}")
+        deadline = time.time() + 180 #Adjust the timeout here if needed. A GUI timeout parameter could be added later.
+        last_status = None
+        done_states = {'done', 'completed'}
+        fail_states = {'error', 'failed', 'cancelled', 'canceled'}
+
+        while time.time() < deadline:
+            try:
+                st_s = str(job.status()).lower()
+            except Exception:
+                st_s = 'unknown'
+
+            if st_s != last_status:
+                uiprint(f"Runtime job status: {st_s}")
+                last_status = st_s
+
+            if any(x in st_s for x in done_states):
+                break
+            if any(x in st_s for x in fail_states):
+                return None, f"Runtime job failed: {st_s}"
+
+            time.sleep(2)
+
+        if not (last_status and any(x in last_status for x in done_states)):
+            return None, f"Runtime timeout waiting for job {job.job_id()} (last status: {last_status or 'unknown'})"
+
+        result = job.result()
+        pub_result = result[0]
+        data = pub_result.data
+        for field_name in data:
+            field_val = getattr(data, field_name)
+            if hasattr(field_val, 'get_counts'):
+                return field_val.get_counts(), None
+        return None, "Runtime result did not contain counts."
+    except Exception as e:
+        return None, f"Runtime Error: {e}"
 
 class FileLikeErrorOSC(object):
     ''' This class emulates a File-Like object
@@ -61,59 +273,72 @@ class FileLikeErrorOSC(object):
             self.older=text # Update memory
 
 
-def run_circuit(qc, shots, backend_name):
+def run_circuit(runtime, qc, shots, backend_name):
+    backend_name = _normalize_backend_name(backend_name)
+    is_fake = backend_name.startswith("Fake")
 
     uiprint("Running circuit on {}...".format(backend_name))
-    client.send_message("/info", "Running circuit on {}...".format(backend_name) )
+    client.send_message("/info", "Running circuit on {}...".format(backend_name))
 
-    flosc = FileLikeOutputOSC() # Use this only for job_monitor output
+    if backend_name == "qasm_simulator":
+        counts = _local_statevector_counts(qc, shots)
+        uiprint("Done!")
+        return counts
 
-    if backend_name != 'qasm_simulator':
-        if backend_name in ('FakeAlmaden', 'FakeArmonk', 'FakeAthens', 'FakeBelem', 'FakeBoeblingen', 'FakeBogota', 'FakeBrooklyn', 'FakeBurlington', 'FakeCambridge', 'FakeCambridgeAlternativeBasis', 'FakeCasablanca', 'FakeEssex', 'FakeGuadalupe', 'FakeJakarta', 'FakeJohannesburg', 'FakeLagos', 'FakeLima', 'FakeLondon', 'FakeManhattan', 'FakeManila', 'FakeMelbourne', 'FakeMontreal', 'FakeMumbai', 'FakeOurense', 'FakeParis', 'FakePoughkeepsie', 'FakeQuito', 'FakeRochester', 'FakeRome', 'FakeRueschlikon', 'FakeSantiago', 'FakeSingapore', 'FakeSydney', 'FakeTenerife', 'FakeTokyo', 'FakeToronto', 'FakeValencia', 'FakeVigo', 'FakeYorktown'):
-            backend_name+='()'
-            backend = eval(backend_name) # this is definitely a security hazard... use at your own risk!
-                # a very interesting alternative is to use: backend = globals()[backend_name]
-            available_qubits = backend.configuration().n_qubits
-            requested_qubits = qc.num_qubits
-            if requested_qubits > available_qubits: # verify if the qubit count is compatible with the selected backend
-                client.send_message("/error", "The circuit submitted is requesting {} qubits but the {} backend selected only has {} available qubits.".format(requested_qubits,backend_name[:-2],available_qubits) )
-                uiprint('The circuit submitted is requesting {} qubits but the {} backend selected only has {} available qubits.'.format(requested_qubits,backend_name[:-2],available_qubits))
-                sys.exit()
-            job = execute(qc, shots=shots, backend=backend)
-            pass
-        else: #we then must be naming a realdevice
-            if not provider: #for which we definitely need credentials! D:
-                client.send_message("/error", "You need to start OSC-Qasm server with the following arguments: --token (--hub, --group, --project).")
-                uiprint('You need to start OSC-Qasm server with the following arguments: --token (--hub, --group, --project).')
-                sys.exit()
-            backend = provider.get_backend(backend_name)
-            job = execute(qc, shots=shots, backend=backend)
-            job_monitor(job, output=flosc, line_discipline="") # 'flosc' (FileLikeOutputOSC) reroutes the output from stdout to the OSC client
+    if is_fake:
+        try:
+            fake_mod = importlib.import_module("qiskit_ibm_runtime.fake_provider")
+            backend_cls = getattr(fake_mod, backend_name)
+            backend = backend_cls()
+        except Exception as e:
+            msg = f"Fake backend '{backend_name}' is unavailable: {e}"
+            uiprint(msg)
+            client.send_message("/error", msg)
+            return {}
+
+        try:
+            transpile(qc, backend=backend, optimization_level=1)
+            base_counts = _local_statevector_counts(qc, shots)
+            noisy_counts = _apply_readout_noise_from_backend(base_counts, int(shots), backend)
+            uiprint("Done!")
+            return noisy_counts
+        except Exception as e:
+            msg = f"Fake backend '{backend_name}' execution failed: {e}"
+            uiprint(msg)
+            client.send_message("/error", msg)
+            return {}
+
+    if runtime["token"]:
+        uiprint("Attempting Qiskit Runtime...")
+        counts, cloud_err = _direct_cloud_sampler(runtime, backend_name, shots, qc)
+        if counts is not None:
+            return counts
+        if cloud_err:
+            uiprint(f"Qiskit Runtime failed: {cloud_err}")
+            try:
+                client.send_message("/error", cloud_err)
+            except Exception:
+                pass
+        return {}
+
+    msg = f"Backend '{backend_name}' requires IBM credentials."
+    uiprint(msg)
+    client.send_message("/error", msg)
+    return {}
+
+def parse_qasm(runtime, qasm_text, shots_arg=1024, backend_name='qasm_simulator'):
+    qc = QuantumCircuit().from_qasm_str(qasm_text)
+    if shots_arg is not None:
+        try:
+            shots = int(shots_arg)
+        except Exception:
+            shots = 1024
     else:
-        backend = Aer.get_backend('qasm_simulator')
-        job = execute(qc, shots=shots, backend=backend)
-    uiprint("Done!") # not working
-    return job.result().get_counts()
+        shots = 1024
 
-
-def parse_qasm(*args):
-    global qc
-
-    qc=QuantumCircuit().from_qasm_str(args[1])
-    if len(args)>2:
-        shots = args[2]
-        pass
-    else:
-        shots=1024
-
-    if len(args)>3:
-        backend_name = args[3]
-    else:
-        backend_name='qasm_simulator'
-
-    counts = run_circuit(qc, shots, backend_name)
+    counts = run_circuit(runtime, qc, shots, backend_name)
     uiprint("Sending result counts back to Client")
-    client.send_message("/info", "Retrieving results from OSC-Qasm..." )
+    client.send_message("/info", "Retrieving results from OSC-Qasm...")
     # list comprehension that converts a Dict into an
     # interleaved string list: [key1, value1, key2, value2...]
     sorted_counts = {}
@@ -125,35 +350,30 @@ def parse_qasm(*args):
     counts_list = " ".join(counts_list)
     client.send_message("/counts", counts_list)
 
-# Mapping the OSC Server callback function
-callback = dispatcher.Dispatcher()
-callback.map("/QuTune", parse_qasm)
+def _build_dispatcher(runtime):
+    callback = dispatcher.Dispatcher()
 
+    def _handle_qasm(_address, *osc_args):
+        if not osc_args:
+            return
+        qasm_text = osc_args[0]
+        shots = osc_args[1] if len(osc_args) > 1 else 1024
+        backend_name = osc_args[2] if len(osc_args) > 2 else 'qasm_simulator'
+        parse_qasm(runtime, qasm_text, shots, backend_name)
 
-def CLI(UDP_IP, RECEIVE_PORT, SEND_PORT, TOKEN, HUB, GROUP, PROJECT, REMOTE):
+    callback.map("/QuTune", _handle_qasm)
+    return callback
 
-    global client, provider, ERR_SEP
+def CLI(UDP_IP, RECEIVE_PORT, SEND_PORT, TOKEN, REGION, INSTANCE, REMOTE):
+
+    global client, ERR_SEP
     ERR_SEP = '----------------------------------------' # For FileLikeErrorOSC() class
-    provider=None
-    local_ip="127.0.0.1"
-
-    if TOKEN:
-        IBMQ.enable_account(TOKEN, 'https://auth.quantum-computing.ibm.com/api', HUB, GROUP, PROJECT)
-        provider=IBMQ.get_provider(hub=HUB, group=GROUP, project=PROJECT)
-        pass
+    runtime = _configure_runtime(TOKEN, REGION, INSTANCE)
     if UDP_IP=="localhost":
         UDP_IP="127.0.0.1"
-        pass
 
-    # find local IP address
-    if REMOTE == None:
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        s.connect(("8.8.8.8", 80))#this throws an error if machine is not connected to any network
-        local_ip = s.getsockname()[0]#this prints 0.0.0.0 if machine is not connected to any network
-        pass
-    elif REMOTE != False:
-        local_ip = REMOTE
-        pass
+    local_ip = _resolve_local_ip(REMOTE)
+    callback = _build_dispatcher(runtime)
 
     #OSC server and client
     server = osc_server.ThreadingOSCUDPServer((local_ip, RECEIVE_PORT), callback)
@@ -163,12 +383,9 @@ def CLI(UDP_IP, RECEIVE_PORT, SEND_PORT, TOKEN, HUB, GROUP, PROJECT, REMOTE):
     uiprint("Server Sending back on {} port {}".format(client._address,  client._port))
     server.serve_forever()
 
-
 async def server_process(args):
-    global client, provider, ERR_SEP
+    global client, ERR_SEP
     ERR_SEP = '----------------------------------------' # For FileLikeErrorOSC() class
-    provider=None
-    local_ip="127.0.0.1"
 
     #OSC server and client
     #parsing arguments from GUI
@@ -176,28 +393,16 @@ async def server_process(args):
     wRECEIVE_PORT = int(args[1])
     wSEND_PORT = int(args[2])
     wTOKEN = args[3]
-    wHUB = args[4]
-    wGROUP = args[5]
-    wPROJECT = args[6]
-    wREMOTE = args[7]
-    if wTOKEN != "false":
-        IBMQ.enable_account(wTOKEN, 'https://auth.quantum-computing.ibm.com/api', wHUB, wGROUP, wPROJECT)
-        provider=IBMQ.get_provider(hub=wHUB, group=wGROUP, project=wPROJECT)
-        pass
+    wREGION = args[4]
+    wINSTANCE = args[5]
+    wREMOTE = args[6]
+    runtime = _configure_runtime(wTOKEN, wREGION, wINSTANCE)
     if wUDP_IP=="localhost":
         wUDP_IP="127.0.0.1"
-        pass
-    # find local IP address
-    if wREMOTE == "None":
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        s.connect(("8.8.8.8", 80))#this throws an error if machine is not connected to any network
-        local_ip = s.getsockname()[0]#this prints 0.0.0.0 if machine is not connected to any network
-        pass
-    elif wREMOTE != "false":
-        local_ip = wREMOTE
-        pass
+    local_ip = _resolve_local_ip(wREMOTE)
+    callback = _build_dispatcher(runtime)
     server = osc_server.AsyncIOOSCUDPServer((local_ip, wRECEIVE_PORT), callback, asyncio.get_event_loop())
-    transport, protocol = await server.create_serve_endpoint()
+    transport, _protocol = await server.create_serve_endpoint()
     client = udp_client.SimpleUDPClient(wUDP_IP, wSEND_PORT)
     client.send_message("/info", "OSC-Qasm is now running")
     uiprint("Server Receiving on {} port {}".format(server._server_address[0], server._server_address[1]))
@@ -209,11 +414,7 @@ async def server_process(args):
     uiprint("Server has stopped now.")
     client.send_message("/info", "OSC-Qasm Server has Stopped.")
 
-
 def GUI():
-    @eel.expose
-    def pythonPrint(message):
-        print("received",message)
     @eel.expose
     def start(*args):
         global server_on
@@ -225,7 +426,6 @@ def GUI():
         server_on = False
     eel.start('index.html', cmdline_args=['-incognito'],size=(840,480),block=True)
 
-
 if __name__ == '__main__':
     global HEADLESS
     p = argparse.ArgumentParser()
@@ -233,10 +433,9 @@ if __name__ == '__main__':
     p.add_argument('receive_port', type=int, nargs='?', default=1416, help='The port where the OSC-Qasm Server will listen for incoming messages. Default port is 1416')
     p.add_argument('send_port', type=int, nargs='?', default=1417, help='The port that OSC-Qasm will use to send messages back to the Client (the client\'s listening port). Default port is 1417')
     p.add_argument('ip', nargs='?', default='127.0.0.1', help='The IP address to where the retrieved results will be sent to (Where the Client is located). Default IP is 127.0.0.1 (localhost)')
-    p.add_argument('--token', help='If you want to run circuits on real quantum hardware, you need to provide your IBMQ token (see https://quantum-computing.ibm.com/account)')
-    p.add_argument('--hub', help='If you want to run circuits on real quantum hardware, you need to provide your IBMQ Hub')
-    p.add_argument('--group', help='If you want to run circuits on real quantum hardware, you need to provide your IBMQ Group')
-    p.add_argument('--project', help='If you want to run circuits on real quantum hardware, you need to provide your IBMQ Project')
+    p.add_argument('--token', help='IBM Cloud API Key / Runtime token for running circuits on IBM hardware')
+    p.add_argument('--region', default='us-east', help='IBM Runtime region, for example us-east or eu-de')
+    p.add_argument('--instance', default='open-instance', help='IBM Runtime instance or CRN, defaults to open-instance')
     p.add_argument('--remote', nargs='?', default=False, help='Declare this as a remote server. In this case, OSC-Qasm will be listenning to messages coming into the network adapter address. If there is a specific network adapter IP you want to listen in, add it as an argument here')
     p.add_argument('--headless', nargs='?', type=bool, const=True, default=False, help='Run OSC-Qasm in headless mode. This is useful if you don\'t want to launch the GUI and only work in the terminal.')
 
@@ -246,18 +445,6 @@ if __name__ == '__main__':
     flerr = FileLikeErrorOSC()
     sys.stderr = flerr
 
-    if args.token:
-        if not args.hub or not args.group or not args.project:
-            if not args.hub and not args.group and not args.project:
-                args.hub='ibm-q'
-                args.group='open'
-                args.project='main'
-                pass
-            else:
-                raise ValueError('You need to specify both --hub, --group, and --project arguments.')
-                args.hub=None
-                args.group=None
-                args.project=None
 
     HEADLESS = args.headless
 
@@ -276,6 +463,6 @@ if __name__ == '__main__':
     uiprint('================================================')
 
     if HEADLESS:
-        CLI(args.ip, args.receive_port, args.send_port, args.token, args.hub, args.group, args.project, args.remote)
+        CLI(args.ip, args.receive_port, args.send_port, args.token, args.region, args.instance, args.remote)
     else:
         GUI()

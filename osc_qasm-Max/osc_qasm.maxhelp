@@ -268,7 +268,7 @@
 									"numoutlets" : 1,
 									"outlettype" : [ "" ],
 									"patching_rect" : [ 47.0, 233.0, 273.0, 22.0 ],
-									"text" : "och.microqiskit qc 2 2 sim 1 1 @console_output 0"
+									"text" : "och.microqiskit qc 2 2 sim 1 1"
 								}
 
 							}

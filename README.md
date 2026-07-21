@@ -295,10 +295,23 @@ Please also note that, as explained in the [Running Server](#running-server) sec
 Before starting, make sure you have [Python](https://www.python.org/) 3.10+ in your system.
 - when using the installer on windows make sure to select the option `Add Python X to PATH`
 
+You may need to use [pyenv](https://github.com/pyenv/pyenv?tab=readme-ov-file#installation) to install and manage the required Python version. Please note that after installing pyenv, you must [set up your shell environment for pyenv](https://github.com/pyenv/pyenv#b-set-up-your-shell-environment-for-pyenv) for it to work correctly.
+
 Clone or [download](https://github.com/iccmr-quantum/OSC-Qasm/archive/refs/heads/main.zip) and unzip this repo.
 
 Open the Terminal (Mac/Linux) or Command Prompt (Windows) and navigate to the folder  where you saved the repo.
 - see here a refresher on how to navigate using the terminal [[1](https://web.archive.org/web/20240206025828/https://computers.tutsplus.com/navigating-the-terminal-a-gentle-introduction--mac-3855t)][[2](https://www.macworld.com/article/221277/command-line-navigating-files-folders-mac-terminal.html)]
+
+Setting up automatic Python version switching with `pyenv` using Python 3.13.12 as an example
+
+Install Python 3.13.12 via pyenv
+- `pyenv install 3.13.12` 
+
+Set this version as the local default
+- `pyenv local 3.13.12`
+
+Verify the installation
+- `python --version` This should output `Python 3.13.12`.
 
 Create a python virtual environment
 - on the terminal, type: `python3 -m venv OSCQasm`
